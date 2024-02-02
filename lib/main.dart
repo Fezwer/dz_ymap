@@ -2,39 +2,60 @@ import 'package:flutter/material.dart';
 import 'package:yandex_mapkit/yandex_mapkit.dart';
 import 'package:geolocator/geolocator.dart';
 
-class PlacemarkMapObject {
-  final MapObjectId mapId;
-  final Point point;
-  final double opacity;
-  final double direction;
-  final bool isDraggable;
-  final PlacemarkIcon icon;
+class LocationRepository {
+  Future<Position> getCurrentLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
 
-  PlacemarkMapObject({
-    required this.mapId,
-    required this.point,
-    required this.opacity,
-    required this.direction,
-    required this.isDraggable,
-    required this.icon,
-  });
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // Обработка случая, когда службы геолокации отключены
+      throw LocationServiceDisabledException('Службы геолокации отключены');
+    }
 
-  factory PlacemarkMapObject.fromObject({
-    required MapObjectId mapId,
-    required Point point,
-    required double opacity,
-    required double direction,
-    required bool isDraggable,
-    required PlacemarkIcon icon,
-  }) =>
-      PlacemarkMapObject(
-        mapId: mapId,
-        point: point,
-        opacity: opacity,
-        direction: direction,
-        isDraggable: isDraggable,
-        icon: icon,
-      );
+    try {
+      permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.deniedForever) {
+        // Обработка случая, когда пользователь навсегда отклонил доступ к геолокации
+        throw LocationPermissionException(
+            'Доступ к геолокации навсегда отклонен');
+      }
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission != LocationPermission.whileInUse &&
+            permission != LocationPermission.always) {
+          // Обработка случая, когда пользователь отказал в доступе к геолокации
+          throw LocationPermissionException('Доступ к геолокации отклонен');
+        }
+      }
+    } catch (e) {
+      throw LocationPermissionException('Ошибка при запросе разрешений: $e');
+    }
+
+    try {
+      return await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+    } catch (e) {
+      throw LocationServiceException(
+          'Произошла ошибка при получении местоположения: $e');
+    }
+  }
+}
+
+class LocationServiceDisabledException implements Exception {
+  final String message;
+  LocationServiceDisabledException(this.message);
+}
+
+class LocationPermissionException implements Exception {
+  final String message;
+  LocationPermissionException(this.message);
+}
+
+class LocationServiceException implements Exception {
+  final String message;
+  LocationServiceException(this.message);
 }
 
 void main() {
@@ -58,61 +79,13 @@ class _MapScreenState extends StatefulWidget {
 class __MapScreenStateState extends State<_MapScreenState> {
   late YandexMapController controller;
   final List<MapObject> mapObjects = [];
+  final LocationRepository _locationRepository = LocationRepository();
   final MapObjectId targetMapObjectId = const MapObjectId('target_placemark');
   late Position _currentPosition;
   final animation =
       const MapAnimation(type: MapAnimationType.smooth, duration: 2.0);
   double zoomLevel = 2;
   final MapObjectId mapObjectId = const MapObjectId('normal_icon_placemark');
-
-  Future<void> _getCurrentLocation() async {
-    bool serviceEnabled;
-    LocationPermission permission;
-
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      // Обработка случая, когда службы геолокации отключены
-      print('РАСПИЛИ МЕНЯ БОЛГАРКОЙ');
-      return;
-    }
-
-    try {
-      permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.deniedForever) {
-        // Обработка случая, когда пользователь навсегда отклонил доступ к геолокации
-        print('КИНА НЕ БУДЕТ');
-        return;
-      }
-
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission != LocationPermission.whileInUse &&
-            permission != LocationPermission.always) {
-          // Обработка случая, когда пользователь отказал в доступе к геолокации
-          print('ПРОБКИ ВЫБИЛО');
-          return;
-        }
-      }
-    } catch (e) {
-      print('Ошибка при запросе разрешений: $e');
-    }
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high);
-      setState(() {
-        _currentPosition = position;
-        print(Point(
-            latitude: _currentPosition.latitude,
-            longitude: _currentPosition.longitude));
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error occurred: $e'),
-        ),
-      );
-    }
-  }
 
   void _onMapTap(Point point) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -166,7 +139,8 @@ class __MapScreenStateState extends State<_MapScreenState> {
           SizedBox(height: 16),
           FloatingActionButton(
             onPressed: () async {
-              _getCurrentLocation();
+              Position _currentPosition =
+                  await _locationRepository.getCurrentLocation();
               final newCameraPosition = CameraPosition(
                   target: Point(
                       latitude: _currentPosition.latitude,
@@ -192,7 +166,7 @@ class __MapScreenStateState extends State<_MapScreenState> {
               );
 
               setState(() {
-                mapObjects.add(mapObject as MapObject);
+                mapObjects.add(mapObject);
               });
             },
             child: Icon(Icons.my_location),
